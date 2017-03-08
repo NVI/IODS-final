@@ -34,6 +34,8 @@ The dataset here has already been parsed with script available [in the same repo
 
 The goal is to see how well course performance (in terms of final grade) can be understood from a number of numeric factors: number of previous attempts on the course, number of credits being studied at the same time, lateness of course submissions (in terms of meeting deadlines) and number of interactions with different kinds of course materials on the VLE. The methods used will be clustering and classification.
 
+It turned out that the predictive power of these numeric factors was not especially high, which is perhaps not that surprising since people are known to achieve good learning results with a wide variety of methods and many people also submit good solutions and essays even if they are chronically late. Even less surprising is that the data formed neat clusters: if a student finds some resources on the VLE interesting and helpful, it is intuitive that they would seek also other resources on the VLE.
+
 ```{r load_data}
 oulad_full <- readRDS("data/oulad.Rds")
 ```
@@ -72,15 +74,19 @@ empty_variables <- c("dataplus", "dualpane", "externalquiz", "folder", "glossary
 oulad %<>% select(-one_of(empty_variables))
 ```
 
+Now that there are less observations and less variables, another look at the summary could be beneficial:
+
 ```{r smaller_summary}
 summary(oulad)
 ```
+
+We can also a look at pair plot:
 
 ```{r pairs}
 oulad %>% select(-final_result) %>% ggpairs(lower = list(combo = wrap("facethist", bins = 25)))
 ```
 
-The methods we will seek to apply to the dataset are clustering and classification. The dataset includes the final result ("Distinction", "Pass", "Fail", "Withdrawn") variable that we will target with linear discriminant analysis.
+For classification the dataset includes the final result ("Distinction", "Pass", "Fail", "Withdrawn") variable that we will target with linear discriminant analysis. For practical purposes we will change the final result variable to factor of single letters ("D", "P", "F", "W"). We will also scale the data so that all variables have same mean and variance:
 
 ```{r scaling}
 oulad_result <- oulad$final_result %>% substr(1, 1) %>% factor(levels = c("D", "P", "F", "W"))
@@ -92,6 +98,8 @@ oulad_scaled$final_result <- oulad_result
 summary(oulad_scaled)
 ```
 
+We will next divide the data into train and test sets. For replicability, we will set a constant seed before using randomization.
+
 ```{r train_and_test}
 set.seed(1)
 idx <- sample(nrow(oulad_scaled), .8*nrow(oulad_scaled))
@@ -99,10 +107,14 @@ train <- oulad_scaled[idx, ]
 test <- oulad_scaled[-idx, ]
 ```
 
+Now we are ready to fit LDA to the train set:
+
 ```{r lda}
 lda.fit <- lda(final_result ~ ., data = train)
 plot(lda.fit, dimen = 2, col = as.numeric(train$final_result))
 ```
+
+The result is not especially neat, though arguably Distinction and Withdrawn grades constrast with the others here. It would seem that the predictive power is limited, and indeed we can make predictions with this LDA:
 
 ```{r predictions}
 observed_result <- test$final_result
@@ -111,17 +123,27 @@ predicted_result <- predict(lda.fit, newdata = test)
 table(observed_result, predicted_result$class)
 ```
 
+The model gives a lot of wrong predictions so it should be rethought or abandoned altogether. Removing Withdrawn grades would likely improve the results considerably, but then there is also less to explain.
+
+Finally we can look at K-means clustering with the data (removing the grade variable):
+
 ```{r dist_matrix}
 oulad_kmeans <- oulad_scaled %>% select(-final_result)
 oulad_dist <- dist(oulad_kmeans)
 ```
 
+We should take a brief look at the choice of number of centers:
+
 ```{r twcss}
-twcss <- sapply(1:20, function(.) {kmeans(oulad_dist, .)$tot.withinss})
-qplot(1:20, twcss)
+twcss <- sapply(1:10, function(.) {kmeans(oulad_dist, .)$tot.withinss})
+qplot(1:10, twcss)
 ```
+
+All choices from 2 to 4 are reasonable. We will try with 4 centers:
 
 ```{r kmeans}
 km4 <- kmeans(oulad_dist, centers = 4)
 pairs(oulad_kmeans, col = km4$cluster)
 ```
+
+The data forms neat clusters, which is not surprising given that most variables are related to the VLE service, where usage of some resources is intuitive to lead to usage of other resources as well.

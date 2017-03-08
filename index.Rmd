@@ -1,0 +1,127 @@
+---
+title: "IODS course final project"
+author: "Niko Ilomäki (niko.ilomaki@helsinki.fi)"
+date: "March 8, 2017"
+output:
+  html_document:
+    theme: spacelab
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    fig_width: 12
+    fig_height: 8
+    code_folding: hide
+---
+
+```{r global_options, include = FALSE}
+library(MASS)
+library(magrittr)
+library(tibble)
+library(dplyr)
+library(ggplot2)
+library(GGally)
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+This final project uses the Open University Learning Analytics dataset, which is available from [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Open+University+Learning+Analytics+dataset) and from its [own website](https://analyse.kmi.open.ac.uk/open_dataset). For the purposes of this project, the data was downloaded from UCI. The dataset is released under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/) license.
+
+Dataset reference: Kuzilek, J., Hlosta, M., Herrmannova, D., Zdrahal, Z. and Wolff, A. OU Analyse: Analysing At-Risk Students at The Open University. Learning Analytics Review, no. LAK15-1, March 2015, ISSN: 2057-7494.
+
+The dataset describes students and their course performances in the Open University. The centerpiece of the dataset are more than 10 million observations of student interactions with the Open University Virtual Learning Environment (VLE).
+
+The dataset here has already been parsed with script available [in the same repository](https://github.com/NVI/IODS-final/blob/master/data/preprocess_data.R), so it is much more compact at this point. In particular, the VLE interactions have been summarised into simple sums and non-numeric variables have been largely removed.
+
+The goal is to see how well course performance (in terms of final grade) can be understood from a number of numeric factors: number of previous attempts on the course, number of credits being studied at the same time, lateness of course submissions (in terms of meeting deadlines) and number of interactions with different kinds of course materials on the VLE. The methods used will be clustering and classification.
+
+```{r load_data}
+oulad_full <- readRDS("data/oulad.Rds")
+```
+
+```{r glimpse}
+glimpse(oulad_full)
+```
+
+At this point the dataset includes 27 variables: code_module and code_presentation together specify the course instance, num_of_prev_attempts is number of previous attempts on the same course, studied_credits is the number of credits the student is currently studying, final_result (here character, but will be later changed into factors) describes the course grade, lateness is the portion of late submissions (0-1), average_ahead_of_time is average of days between submission and deadline so that negative number means a late submission. The rest of the variables are numbers of interactions with different VLE resources. It should be noted that same students will be present in the data multiple times for different courses.
+
+```{r summary}
+summary(oulad_full)
+```
+
+While the dataset has been condensed already, it still contains data for multiple courses:
+
+```{r courses}
+oulad_full %>% group_by(code_module, code_presentation) %>% tally(sort=TRUE)
+```
+
+To avoid comparing apples with oranges, we will from now on focus solely on the course instance with most observations: CCC/2014J. Cross-analysis between courses would be interesting, but it is not done here.
+
+```{r subset_data}
+oulad <- oulad_full %>% filter(code_module == "CCC", code_presentation == "2014J") %>% select(-code_module, -code_presentation)
+```
+
+We should investigate whether this course instance uses all of the VLE variety and remove unrelevant activities, if needed:
+
+```{r column_sums}
+non_vle_variables <- c("num_of_prev_attempts", "studied_credits", "final_result", "lateness", "average_ahead_of_time")
+oulad %>% select(-one_of(non_vle_variables)) %>% colSums()
+```
+
+```{r remove_columns}
+empty_variables <- c("dataplus", "dualpane", "externalquiz", "folder", "glossary", "htmlactivity", "ouelluminate", "ouwiki", "questionnaire", "repeatactivity", "sharedsubpage")
+oulad %<>% select(-one_of(empty_variables))
+```
+
+```{r smaller_summary}
+summary(oulad)
+```
+
+```{r pairs}
+oulad %>% select(-final_result) %>% ggpairs(lower = list(combo = wrap("facethist", bins = 25)))
+```
+
+The methods we will seek to apply to the dataset are clustering and classification. The dataset includes the final result ("Distinction", "Pass", "Fail", "Withdrawn") variable that we will target with linear discriminant analysis.
+
+```{r scaling}
+oulad_result <- oulad$final_result %>% substr(1, 1) %>% factor(levels = c("D", "P", "F", "W"))
+oulad_scaled <- oulad %>% select(-final_result) %>% scale() %>% as_tibble()
+oulad_scaled$final_result <- oulad_result
+```
+
+```{r scaled_summary}
+summary(oulad_scaled)
+```
+
+```{r train_and_test}
+set.seed(1)
+idx <- sample(nrow(oulad_scaled), .8*nrow(oulad_scaled))
+train <- oulad_scaled[idx, ]
+test <- oulad_scaled[-idx, ]
+```
+
+```{r lda}
+lda.fit <- lda(final_result ~ ., data = train)
+plot(lda.fit, dimen = 2, col = as.numeric(train$final_result))
+```
+
+```{r predictions}
+observed_result <- test$final_result
+test %<>% select(-final_result)
+predicted_result <- predict(lda.fit, newdata = test)
+table(observed_result, predicted_result$class)
+```
+
+```{r dist_matrix}
+oulad_kmeans <- oulad_scaled %>% select(-final_result)
+oulad_dist <- dist(oulad_kmeans)
+```
+
+```{r twcss}
+twcss <- sapply(1:20, function(.) {kmeans(oulad_dist, .)$tot.withinss})
+qplot(1:20, twcss)
+```
+
+```{r kmeans}
+km4 <- kmeans(oulad_dist, centers = 4)
+pairs(oulad_kmeans, col = km4$cluster)
+```
